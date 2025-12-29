@@ -30,12 +30,12 @@
 
 | # | 功能名稱 | 說明 | 優先級 |
 |---|---------|------|-------|
-| 1 | **建立貸款訂單** | 用戶申請時建立訂單，初始狀態 INITIATED | P0 |
+| 1 | **建立貸款訂單** | 用戶申請時建立訂單，初始狀態 PENDING | P0 |
 | 2 | **狀態機管理** | 管理訂單狀態轉換，確保只能按規則轉換 | P0 |
-| 3 | **Saga 協調器** | 協調跨模組流程，處理失敗補償 | P0 |
-| 4 | **狀態變更事件** | 狀態變更時發布事件，通知其他模組 | P1 |
-| 5 | **訂單查詢** | 提供訂單詳情查詢，給 App 和後台用 | P1 |
-| 6 | **訂單歷程記錄** | 記錄每次狀態變更的時間和原因 | P1 |
+| 3 | **Saga 協調器** | 協調跨模組流程，處理失敗補償 | P1 |
+| 4 | **狀態變更事件** | 狀態變更時發布事件，通知其他模組 | P2 |
+| 5 | **訂單查詢** | 提供訂單詳情查詢，給 App 和後台用 | P0 |
+| 6 | **訂單歷程記錄** | 記錄每次狀態變更的時間和原因（粗粒度，用於找故事） | P1 |
 
 ---
 
@@ -45,21 +45,19 @@
 ```
 用戶申請
     ↓
-loancore 建立訂單 (INITIATED)
+loancore 建立訂單 (PENDING)
     ↓
-loancore 呼叫 bureau → 狀態變 BUREAU_PROCESSING
+loancore 呼叫 bureau → 狀態變 BUREAU_CHECK
     ↓
-bureau 完成 → 狀態變 BUREAU_DONE
+bureau 完成 → 狀態變 UNDERWRITING
     ↓
-loancore 呼叫 origin → 狀態變 UNDERWRITING
+origin 核准 → 狀態變 OFFER_READY
     ↓
-origin 核准 → 狀態變 APPROVED
-    ↓
-loancore 呼叫 sign → 狀態變 SIGNING
+loancore 呼叫 sign → 狀態變 SIGN_PENDING
     ↓
 sign 完成 → 狀態變 SIGNED
     ↓
-loancore 呼叫 pay → 狀態變 DISBURSING
+loancore 呼叫 pay → 狀態變 DISBURSAL_PENDING
     ↓
 pay 放款成功 → 狀態變 DISBURSED → ACTIVE
 ```
@@ -93,62 +91,172 @@ loancore 回傳：當前狀態 + 預計下一步 + 歷史軌跡
 ## 3.4 訂單狀態定義
 
 | 狀態 | 中文 | 說明 | 下一步可能狀態 |
-|-----|------|------|--------------|
-| INITIATED | 已提交 | 訂單剛建立 | BUREAU_PROCESSING |
-| BUREAU_PROCESSING | 徵信中 | 正在查徵信 | BUREAU_DONE, REJECTED |
-| BUREAU_DONE | 徵信完成 | 等待審核 | UNDERWRITING |
-| UNDERWRITING | 審核中 | 決策引擎處理中 | APPROVED, REJECTED, LSP_PENDING |
-| APPROVED | 已核准 | 等待簽約 | SIGNING |
+|-----|------|------|--------------| 
+| PENDING | 待處理 | 訂單剛建立 | BUREAU_CHECK |
+| BUREAU_CHECK | 徵信查詢中 | 正在查徵信 | UNDERWRITING, REJECTED |
+| UNDERWRITING | 審核中 | 決策引擎處理中 | OFFER_READY, REJECTED, LSP_ROUTING |
 | REJECTED | 已拒絕 | 終態 | - |
-| LSP_PENDING | 導流中 | 轉給合作商 | - |
-| SIGNING | 簽約中 | 用戶簽約中 | SIGNED, EXPIRED |
-| SIGNED | 已簽約 | 等待放款 | DISBURSING |
-| EXPIRED | 已過期 | 簽約超時，終態 | - |
-| DISBURSING | 放款中 | 正在轉帳 | DISBURSED, DISBURSAL_FAILED |
+| LSP_ROUTING | 轉導合作商 | 終態 | - |
+| OFFER_READY | Offer已產生 | 等待用戶簽約 | SIGN_PENDING |
+| SIGN_PENDING | 待簽約 | 用戶簽約中 | SIGNED, CANCELLED |
+| SIGNED | 已簽約 | 等待放款 | DISBURSAL_PENDING |
+| DISBURSAL_PENDING | 待放款 | 正在轉帳 | DISBURSED, DISBURSAL_FAILED |
+| DISBURSAL_FAILED | 放款失敗 | 需要處理 | DISBURSAL_PENDING (重試) |
 | DISBURSED | 已放款 | 錢已到帳 | ACTIVE |
-| DISBURSAL_FAILED | 放款失敗 | 需要處理 | DISBURSING (重試) |
 | ACTIVE | 還款中 | 正常還款期 | OVERDUE, CLOSED |
 | OVERDUE | 逾期 | 有未還款項 | ACTIVE, NPA, CLOSED |
-| NPA | 呆帳 | 逾期 > 90 天 | WRITTEN_OFF, CLOSED |
-| CLOSED | 已結案 | 終態 | - |
-| WRITTEN_OFF | 已沖銷 | 終態 | - |
+| NPA | 不良資產 | 逾期 > 90 天 | WRITTEN_OFF, CLOSED |
+| CLOSED | 已結清 | 終態 | - |
+| WRITTEN_OFF | 已呆帳核銷 | 終態 | - |
+| CANCELLED | 已取消 | 終態 | - |
+
+### 狀態流程圖
+
+```
+                              ┌──────────────┐
+                              │   REJECTED   │ (終態)
+                              └──────────────┘
+                                    ↑
+    ┌─────────┐    ┌──────────────┐ │ ┌──────────────┐
+    │ PENDING │───→│ BUREAU_CHECK │─┼→│ UNDERWRITING │
+    └─────────┘    └──────────────┘ │ └──────┬───────┘
+                                    │        │
+                              ┌─────┴────┐   ├───────────────────┐
+                              │LSP_ROUTING│   │                   │
+                              └──────────┘   ↓                   ↓
+                              (終態)   ┌───────────┐      ┌──────────┐
+                                       │OFFER_READY│      │ REJECTED │
+                                       └─────┬─────┘      └──────────┘
+                                             │
+                                             ↓
+                                       ┌────────────┐     ┌───────────┐
+                                       │SIGN_PENDING│────→│ CANCELLED │ (終態)
+                                       └─────┬──────┘     └───────────┘
+                                             │
+                                             ↓
+                                       ┌──────────┐
+                                       │  SIGNED  │
+                                       └────┬─────┘
+                                            │
+                                            ↓
+    ┌────────────────┐  ←──(重試)──  ┌──────────────────┐
+    │DISBURSAL_FAILED│──────────────→│ DISBURSAL_PENDING│
+    └────────────────┘               └────────┬─────────┘
+                                              │
+                                              ↓
+                                       ┌───────────┐
+                                       │ DISBURSED │
+                                       └─────┬─────┘
+                                             │
+                                             ↓
+              ┌────────┐  ←──(還清)──  ┌──────────┐
+              │ ACTIVE │←─────────────│  ACTIVE  │
+              └───┬────┘              └────┬─────┘
+                  │                        │
+          逾期    ↓                        ↓ 結清
+              ┌─────────┐            ┌──────────┐
+              │ OVERDUE │───────────→│  CLOSED  │ (終態)
+              └────┬────┘            └──────────┘
+                   │
+          90+天    ↓
+              ┌─────────┐
+              │   NPA   │
+              └────┬────┘
+                   │
+                   ├───────────────→ CLOSED (終態)
+                   ↓
+              ┌─────────────┐
+              │ WRITTEN_OFF │ (終態)
+              └─────────────┘
+```
+
+### 可倒退/循環的狀態
+| 循環 | 說明 | History 記錄價值 |
+|-----|------|-----------------|
+| `DISBURSAL_FAILED ↔ DISBURSAL_PENDING` | 放款失敗後重試 | 記錄每次重試的時間和失敗原因 |
+| `ACTIVE ↔ OVERDUE` | 用戶逾期後還清，可能多次循環 | 記錄每次進出逾期的時間 |
 
 ---
 
 ## 3.5 建議 API 清單
 
-| API | 用途 | 呼叫者 | 備註 |
-|-----|------|-------|------|
-| `POST /loan/apply` | 建立新訂單 | App | 申請入口 |
-| `GET /loan/{orderId}` | 查詢訂單詳情 | App, 後台 | 含當前狀態 |
-| `GET /loan/{orderId}/history` | 查詢狀態歷程 | App, 後台 | 時間軸 |
-| `POST /loan/{orderId}/cancel` | 用戶取消申請 | App | 限特定狀態可取消 |
-| `POST /loan/{orderId}/retry` | 重試失敗步驟 | 後台 | 放款失敗後重試 |
-| `GET /loan/list` | 查詢用戶所有訂單 | App | 訂單列表 |
-
-**內部 API (給其他模組用)：**
-| API | 用途 | 呼叫者 |
-|-----|------|-------|
-| `POST /internal/loan/{orderId}/status` | 更新訂單狀態 | 各模組 |
-| `POST /internal/loan/{orderId}/event` | 記錄事件 | 各模組 |
+| API | 用途 | 呼叫者 | POC 狀態 |
+|-----|------|-------|----------|
+| `POST /loancore/order/init` | 建立新訂單 | App | ✅ 已實作 |
+| `POST /loancore/order/findById` | 查詢訂單詳情 | App, 後台 | ✅ 已實作 |
+| `POST /loancore/order/all` | 查詢用戶所有訂單 | App | ✅ 已實作 |
+| `POST /loancore/order/updateState` | 更新訂單狀態 | 各模組 | ✅ 已實作 |
+| `GET /loan/{orderId}/history` | 查詢狀態歷程 | App, 後台 | ⏸️ 待實作 (需 LoanOrderHistory 表) |
+| `POST /loan/{orderId}/cancel` | 用戶取消申請 | App | ⏸️ 可選 |
+| `POST /loan/{orderId}/retry` | 重試失敗步驟 | 後台 | ⏸️ 可選 |
 
 ---
 
-## 3.6 大概會怎麼開發
+## 3.6 資料表設計（混合式架構）
+
+### 設計理念
+採用「混合式」架構：loancore 存粗粒度歷史（找故事用），各子模組存細粒度業務記錄。
+
+### loancore 的表
+```sql
+-- 總狀態機（當前狀態）
+LoanOrder (
+    loanOrderId,
+    userId,
+    loanState,      -- 當前狀態
+    amount,
+    createdAt,
+    updatedAt
+)
+
+-- 狀態變更歷史（粗粒度，找故事用）
+LoanOrderHistory (
+    id,
+    loanOrderId,
+    fromStatus,     -- 從什麼狀態
+    toStatus,       -- 變成什麼狀態
+    triggeredBy,    -- 誰觸發的 (bureau/origin/system/user)
+    remark,         -- 備註
+    createdAt
+)
+```
+
+### 各子模組的表（細粒度）
+```sql
+-- bureau 模組
+BureauRecord (orderId, provider, score, riskLevel, rawResponse, createdAt)
+BureauApiLog (orderId, requestBody, responseBody, status, createdAt)
+
+-- origin 模組
+UnderwritingRecord (orderId, decision, approvedAmount, reason, createdAt)
+
+-- sign 模組
+SigningContract (orderId, contractUrl, signedAt, eSignRef, createdAt)
+
+-- pay 模組
+DisbursalRecord (orderId, bankRef, amount, status, createdAt)
+DisbursalApiLog (orderId, requestBody, responseBody, status, createdAt)
+```
+
+### 找故事方式
+- **粗粒度故事**：查 `LoanOrderHistory` 一張表即可
+- **細粒度細節**：去對應子模組查 ApiLog
+
+---
+
+## 3.7 開發步驟
 
 ### Step 1：定義狀態機
-- 用 Enum 定義所有狀態
-- 定義允許的狀態轉換規則（誰可以轉到誰）
-- 可以用 Spring Statemachine 或自己寫
+- 用 Enum 定義所有狀態 (`LoanStateEnum`)
+- 定義允許的狀態轉換規則（`LoanOrderGuardService`）
 
 ### Step 2：建立訂單 Entity
-- LoanOrder 表：存訂單主資料
-- LoanOrderHistory 表：存每次狀態變更
+- LoanOrder 表：存訂單主資料 ✅ 已完成
+- LoanOrderHistory 表：存每次狀態變更 ⏸️ 待實作
 
 ### Step 3：實作 Saga 協調器
-- 定義每個流程的步驟順序
-- 定義每個步驟的補償動作
-- POC 可以用簡單的 if-else，正式可用 Saga 框架
+- POC 可以用簡單的 if-else
+- 正式環境可用 Saga 框架
 
 ### Step 4：事件發布
 - 狀態變更時發 MQ 事件
@@ -156,7 +264,7 @@ loancore 回傳：當前狀態 + 預計下一步 + 歷史軌跡
 
 ---
 
-## 3.7 和其他模組的關係
+## 3.8 和其他模組的關係
 
 ```
                     ┌─────────────┐
@@ -183,7 +291,7 @@ loancore 回傳：當前狀態 + 預計下一步 + 歷史軌跡
 
 ---
 
-## 3.8 微服務切分點 (未來考量)
+## 3.9 微服務切分點 (未來考量)
 
 **不建議獨立拆分**，原因：
 1. 這是核心協調器，和所有模組都有關聯
@@ -192,11 +300,11 @@ loancore 回傳：當前狀態 + 預計下一步 + 歷史軌跡
 
 ---
 
-## 3.9 重要設計考量
+## 3.10 重要設計考量
 
 | 項目 | 建議 |
 |-----|------|
 | **狀態轉換鎖** | 同一訂單同時只能有一個狀態轉換，避免競爭 |
 | **冪等性** | 狀態更新 API 要支援冪等，重複呼叫不會出錯 |
 | **歷程不可變** | LoanOrderHistory 只能 INSERT，不能 UPDATE/DELETE |
-| **超時處理** | 某些狀態要有超時機制（如 SIGNING 超過 7 天自動 EXPIRED） |
+| **超時處理** | 某些狀態要有超時機制（如 SIGN_PENDING 超過 7 天自動 CANCELLED） |

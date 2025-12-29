@@ -1,6 +1,6 @@
 package com.citrus.loancore.service.query;
 
-import java.util.Optional;
+import java.util.List;
 
 import org.springframework.stereotype.Service;
 
@@ -19,7 +19,8 @@ public class LoanOrderQueryService {
         return loanOrderDao.findById(loanOrderId);
     }
 
-    public Optional<LoanOrder> findByUserId(String userId) {
+    public List<LoanOrder> findByUserId(String userId) {
         return loanOrderDao.findByUserId(userId);
     }
+
 }

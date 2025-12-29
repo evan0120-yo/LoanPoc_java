@@ -3,10 +3,11 @@ package com.citrus.loancore.dao;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.stereotype.Component;
-
+import com.fasterxml.uuid.Generators;
 import com.citrus.loancore.enums.LoanStateEnum;
 import com.citrus.loancore.model.LoanOrder;
 import com.citrus.loancore.repository.LoanOrderRepository;
@@ -21,6 +22,7 @@ public class LoanOrderDao {
 
     public LoanOrder save(LoanOrder loanOrder) {
         Instant now = Instant.now();
+        loanOrder.setLoanOrderId(Generators.timeBasedGenerator().generate().toString());
         loanOrder.setLoanState(LoanStateEnum.PENDING);
         loanOrder.setCreatedAt(now);
         loanOrder.setUpdatedAt(now);
@@ -41,7 +43,7 @@ public class LoanOrderDao {
                 .orElseThrow(() -> new RuntimeException("Loan Order not found"));
     }
 
-    public Optional<LoanOrder> findByUserId(String userId) {
+    public List<LoanOrder> findByUserId(String userId) {
         return loanOrderRepository.findByUserId(userId);
     }
 
