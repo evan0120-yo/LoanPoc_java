@@ -4,7 +4,6 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
-import java.util.Optional;
 
 import org.springframework.stereotype.Component;
 import com.fasterxml.uuid.Generators;
@@ -22,19 +21,21 @@ public class LoanOrderDao {
 
     public LoanOrder save(LoanOrder loanOrder) {
         Instant now = Instant.now();
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Kolkata"));
         loanOrder.setLoanOrderId(Generators.timeBasedGenerator().generate().toString());
         loanOrder.setLoanState(LoanStateEnum.PENDING);
         loanOrder.setCreatedAt(now);
         loanOrder.setUpdatedAt(now);
         loanOrder.setStateChangedAt(now);
-        loanOrder.setApplicationDate(LocalDate.now(ZoneId.of("Asia/Kolkata")));
+        loanOrder.setApplicationDate(today);
         return loanOrderRepository.save(loanOrder);
     }
 
     public LoanOrder update(LoanOrder loanOrder, LoanStateEnum loanState) {
+        Instant now = Instant.now();
         loanOrder.setLoanState(loanState);
-        loanOrder.setStateChangedAt(Instant.now());
-        loanOrder.setUpdatedAt(Instant.now());
+        loanOrder.setStateChangedAt(now);
+        loanOrder.setUpdatedAt(now);
         return loanOrderRepository.save(loanOrder);
     }
 

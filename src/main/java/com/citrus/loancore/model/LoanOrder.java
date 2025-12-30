@@ -12,6 +12,7 @@ import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -86,6 +87,6 @@ public class LoanOrder {
     private String disbursalUtr;
     // ========== 版本控制 (樂觀鎖) ==========
     @Column(name = "version")
-    @Builder.Default
-    private Long version = 0L;
+    @Version
+    private Long version;
 }

@@ -4,6 +4,8 @@ import java.time.Instant;
 import java.time.LocalDate;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.citrus.loancore.enums.LoanStateEnum;
 import com.citrus.loancore.model.LoanOrder;
@@ -23,7 +25,9 @@ public class LoanOrderStoreUsecase {
     private final LoanOrderStoreService loanOrderStoreService;
     private final LoanOrderQueryService loanOrderQueryService;
     private final LoanOrderGuardService loanOrderGuardService;
+    private final TransactionTemplate transactionTemplate;
 
+    @Transactional
     public LoanOrder save(LoanOrderInitReq req) {
         // 1. save order
         Instant now = Instant.now();
@@ -60,18 +64,21 @@ public class LoanOrderStoreUsecase {
         LoanOrder loanOrder = loanOrderQueryService.findById(req.getLoanOrderId());
         // 2. check state
         loanOrderGuardService.checkLoanOrderStatus(loanOrder, req.getLoanState());
-        // 3. update state
-        LoanOrder updated = loanOrderStoreService.updateState(loanOrder, req.getLoanState());
-        // 4. save history
-        LoanOrderHistory loanOrderHistory = LoanOrderHistory.builder()
-                .loanOrderId(updated.getLoanOrderId())
-                .fromStatus(loanOrder.getLoanState())
-                .toStatus(req.getLoanState())
-                .triggeredBy(req.getTriggeredBy())
-                .remark(req.getRemark())
-                .createdAt(Instant.now())
-                .build();
-        loanOrderStoreService.saveLoanOrderHistory(loanOrderHistory);
+        LoanOrder updated = transactionTemplate.execute(status -> {
+            // 3. update state
+            LoanOrder result = loanOrderStoreService.updateState(loanOrder, req.getLoanState());
+            // 4. save history
+            LoanOrderHistory loanOrderHistory = LoanOrderHistory.builder()
+                    .loanOrderId(result.getLoanOrderId())
+                    .fromStatus(loanOrder.getLoanState())
+                    .toStatus(req.getLoanState())
+                    .triggeredBy(req.getTriggeredBy())
+                    .remark(req.getRemark())
+                    .createdAt(Instant.now())
+                    .build();
+            loanOrderStoreService.saveLoanOrderHistory(loanOrderHistory);
+            return result;
+        });
         return updated;
     }
 
