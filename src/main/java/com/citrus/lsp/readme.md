@@ -24,9 +24,13 @@
 ```
 用戶申請貸款
     ↓
+origin → loancore 建單 (status=PENDING)
+    ↓
+loancore 協調徵信 + 決策
+    ↓
 origin 審核：CIBIL 650，我們的政策要求 680+
     ↓
-origin 決定：不自己做，轉給 LSP
+loancore 更新狀態為 LSP_ROUTING，發送 MQ 給 lsp
     ↓
 lsp 收到 Lead，開始瀑布流路由：
     1. Partner A：要求 CIBIL > 600 ✓ → 佣金 3%
@@ -41,7 +45,7 @@ lsp 收到 Lead，開始瀑布流路由：
     ↓
 Partner A 核准 → 用戶跳轉完成申請
 Partner A 拒絕 → 嘗試 Partner B...
-全部拒絕 → 訂單狀態 REJECTED
+全部拒絕 → lsp 通知 loancore 更新狀態
 ```
 
 ---
@@ -111,18 +115,19 @@ Partner A 拒絕 → 嘗試 Partner B...
 
 ```
             ┌─────────────┐
-            │   origin    │
+            │  loancore   │ ← 統一資料來源
+            │ (LoanOrder) │
             └──────┬──────┘
-                   │ 導流請求
+                   │ 狀態=LSP_ROUTING 時發 MQ
                    ▼
             ┌─────────────┐           ┌─────────────────┐
             │     lsp     │◀─────────▶│    Partners     │
             └──────┬──────┘  API/回調  │ (外部合作商)    │
                    │                  └─────────────────┘
-                   │ 結果通知
+                   │ 結果通知 (MQ)
                    ▼
             ┌─────────────┐
-            │  loancore   │
+            │  loancore   │ ← 更新 LoanOrder 狀態
             └─────────────┘
 ```
 

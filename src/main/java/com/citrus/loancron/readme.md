@@ -40,7 +40,7 @@ loancron 的職責：
 
 | 任務 | 執行時間 | 目標模組 | 通訊方式 |
 |------|---------|---------|---------|
-| 處理待審批申請 | 每 5 分鐘 | origin | MQ |
+| 處理待審批訂單 (PENDING) | 每 5 分鐘 | loancore | MQ |
 | 手動觸發測試 | 按需 | - | HTTP |
 
 ### Phase 2
@@ -70,14 +70,13 @@ loancron 的職責：
 ```
 loancron/
 ├── scheduler/
-│   ├── ApplicationProcessScheduler.java   ← @Scheduled 每 5 分鐘
+│   ├── PendingOrderProcessScheduler.java  ← @Scheduled 每 5 分鐘 (處理 PENDING 訂單)
 │   ├── EodScheduler.java                  ← @Scheduled 每日 00:00
 │   └── AutoDebitScheduler.java            ← @Scheduled 每日 09:00
 │
 ├── producer/
-│   ├── OriginMqProducer.java              ← 發送「處理申請」訊息
+│   ├── LoancoreMqProducer.java            ← 發送「處理 PENDING 訂單」訊息
 │   ├── LedgerMqProducer.java              ← 發送「計息」訊息
-│   ├── LoancoreMqProducer.java            ← 發送「狀態遷移」訊息
 │   └── CallectMqProducer.java             ← 發送「逾期通知」訊息
 │
 └── controller/
@@ -88,13 +87,13 @@ loancron/
 
 # 6. 任務觸發範例
 
-### 處理待審批申請
+### 處理待審批訂單
 
 ```java
 @Scheduled(fixedRate = 300000)  // 每 5 分鐘
-public void processApplications() {
-    // 發送 MQ，讓 origin 處理待審批的申請
-    originMqProducer.sendProcessApplicationsCommand();
+public void processPendingOrders() {
+    // 發送 MQ，讓 loancore 處理 PENDING 狀態的訂單
+    loancoreMqProducer.sendProcessPendingOrdersCommand();
 }
 ```
 

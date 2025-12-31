@@ -9,20 +9,20 @@
 | 項目 | 說明 |
 |------|------|
 | 角色 | 偵探部門 / 防腐層 |
-| 對外 API | ❌ 僅供 origin 調用 |
-| 核心職責 | PAN 驗證、CIBIL 查詢、BSA 分析、結果標準化 |
+| 對外 API | ❌ 僅供 **loancore** 調用 |
+| 核心職責 | PAN 驗證、CIBIL 查詢、BSA 分析、**只收集資料，不做決策** |
 
 ---
 
 # 2. 核心流程
 
 ```
-origin (需要徵信)
+loancore (PENDING 訂單需要徵信)
     │
     │ POST /bureau/report/full
     ▼
 ┌─────────────────┐
-│     bureau      │
+│     bureau      │ ← 只收集資料，不做決策
 │  1. PAN 驗證    │
 │  2. CIBIL 查詢  │
 │  3. BSA 分析    │
@@ -30,7 +30,12 @@ origin (需要徵信)
          │
          ▼ 標準化報告
 ┌─────────────────┐
-│     origin      │ ← 用報告做決策
+│    loancore     │ ← 更新狀態為 BUREAU_CHECK
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│     origin      │ ← 拿報告做決策
 └─────────────────┘
 ```
 
@@ -44,7 +49,7 @@ origin (需要徵信)
 | 2 | **CIBIL 查詢** | 取得信用分數 | P0 |
 | 3 | **BSA 分析** | 解析銀行流水 | P0 |
 | 4 | **結果快取** | 30 天內不重複查詢 | P0 |
-| 5 | **綜合報告** | 打包成標準格式 | P1 |
+| 5 | **綜合報告** | 打包成標準格式 (**不含決策**) | P1 |
 
 ---
 
@@ -54,16 +59,16 @@ origin (需要徵信)
 
 | API | 用途 | 呼叫者 |
 |-----|------|-------|
-| `POST /bureau/report/full` | 一次做完全部徵信 | origin |
-| `POST /bureau/report/{applicationId}` | 查詢既有報告 | origin |
+| `POST /bureau/report/full` | 一次做完全部徵信 | **loancore** |
+| `POST /bureau/report/{orderId}` | 查詢既有報告 | loancore |
 
 ### Phase 2
 
 | API | 用途 | 呼叫者 |
 |-----|------|-------|
-| `POST /bureau/pan/verify` | 單獨驗證 PAN | origin |
-| `POST /bureau/cibil/inquiry` | 單獨查 CIBIL | origin |
-| `POST /bureau/bsa/analyze` | 單獨分析 BSA | origin |
+| `POST /bureau/pan/verify` | 單獨驗證 PAN | loancore |
+| `POST /bureau/cibil/inquiry` | 單獨查 CIBIL | loancore |
+| `POST /bureau/bsa/analyze` | 單獨分析 BSA | loancore |
 
 ---
 
@@ -84,3 +89,4 @@ origin (需要徵信)
 | **防腐層** | 統一輸出格式 |
 | **快取** | 減少查詢成本 |
 | **重試** | 外部 API 失敗要重試 |
+| **不做決策** | 只返回資料，決策由 origin 負責 |
