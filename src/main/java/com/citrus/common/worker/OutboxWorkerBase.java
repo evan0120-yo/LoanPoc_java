@@ -2,9 +2,12 @@ package com.citrus.common.worker;
 
 import java.util.List;
 
+import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 
+import com.citrus.common.enums.OutboxStatusEnum;
 import com.citrus.common.model.OutboxMessage;
+import com.citrus.common.repository.OutboxRepository;
 import com.citrus.common.service.OutboxService;
 
 import lombok.extern.slf4j.Slf4j;
@@ -28,6 +31,11 @@ public abstract class OutboxWorkerBase<T extends OutboxMessage> {
      * 子類必須提供 OutboxService
      */
     protected abstract OutboxService<T> getOutboxService();
+
+    /**
+     * 子類必須提供 OutboxRepository
+     */
+    protected abstract OutboxRepository<T> getOutboxRepository();
 
     /**
      * 子類必須實作發送邏輯
@@ -60,7 +68,12 @@ public abstract class OutboxWorkerBase<T extends OutboxMessage> {
     @Scheduled(fixedDelay = 5000)
     public void processMessages() {
         OutboxService<T> outboxService = getOutboxService();
-        List<T> pendingMessages = outboxService.findPendingMessages(getBatchSize());
+
+        // 使用 Repository 的鎖定查詢（FOR UPDATE SKIP LOCKED）
+        // 確保多台 server 不會重複處理相同訊息
+        List<T> pendingMessages = getOutboxRepository().findByStatusForUpdate(
+                OutboxStatusEnum.PENDING,
+                PageRequest.of(0, getBatchSize()));
 
         if (pendingMessages.isEmpty()) {
             return;

@@ -273,3 +273,238 @@ GROUP BY rejectReason
 | **申請限流** | 防止惡意刷單 |
 | **決策可配置** | 規則可動態調整 |
 | **審計軌跡** | 每次決策記錄原因 (存在 LoanOrderHistory) |
+
+---
+
+# 9. Outbox Pattern 實作
+
+## 9.1 設計目標
+
+使用 Outbox Pattern 確保 origin → loancore 的訊息可靠性：
+- ✅ 保證訊息不遺失（即使 RabbitMQ 暫時不可用）
+- ✅ 保證本地事務和訊息發送的原子性
+- ✅ 支援失敗重試
+- ✅ 提供審計軌跡
+
+## 9.2 需要實作的組件
+
+### 1. OriginOutboxMessage (model)
+
+繼承 `common.OutboxMessage` 抽象基類。
+
+```java
+@Entity
+@Table(name = "origin_outbox_message")
+public class OriginOutboxMessage extends OutboxMessage {
+    // 繼承所有 protected 欄位
+}
+```
+
+### 2. OriginOutboxRepository (repository)
+
+繼承 `common.OutboxRepository` 通用介面。
+
+```java
+public interface OriginOutboxRepository extends OutboxRepository<OriginOutboxMessage> {
+    // 自動繼承 findByStatusForUpdate() 方法
+    // 不用寫任何程式碼
+}
+```
+
+### 3. OriginOutboxDao (dao)
+
+```java
+@Component
+public class OriginOutboxDao {
+    private final OriginOutboxRepository repository;
+    
+    public OriginOutboxMessage save(OriginOutboxMessage message) { 
+        return repository.save(message);
+    }
+    
+    public OriginOutboxMessage findById(String outboxId) {
+        return repository.findById(outboxId).orElse(null);
+    }
+    
+    public void markAsSent(String outboxId) {
+        OriginOutboxMessage message = findById(outboxId);
+        if (message != null) {
+            message.setStatus(OutboxStatusEnum.SENT);
+            message.setSentAt(Instant.now());
+            repository.save(message);
+        }
+    }
+    
+    public void markAsFailed(String outboxId, String errorMessage) {
+        OriginOutboxMessage message = findById(outboxId);
+        if (message != null) {
+            message.setStatus(OutboxStatusEnum.FAILED);
+            message.setErrorMessage(errorMessage);
+            repository.save(message);
+        }
+    }
+    
+    public void incrementRetryCount(String outboxId) {
+        OriginOutboxMessage message = findById(outboxId);
+        if (message != null) {
+            message.setRetryCount(message.getRetryCount() + 1);
+            repository.save(message);
+        }
+    }
+}
+```
+
+### 4. OriginOutboxService (service)
+
+實作 `common.OutboxService` 介面。
+
+```java
+@Service
+public class OriginOutboxService implements OutboxService<OriginOutboxMessage> {
+    
+    private final OriginOutboxDao outboxDao;
+    private final ObjectMapper objectMapper;
+    
+    @Override
+    public OriginOutboxMessage save(String aggregateType, String aggregateId, 
+                                     String eventType, Object payload) {
+        OriginOutboxMessage message = new OriginOutboxMessage();
+        message.setOutboxId(UUID.randomUUID().toString());
+        message.setAggregateType(aggregateType);
+        message.setAggregateId(aggregateId);
+        message.setEventType(eventType);
+        message.setPayload(objectMapper.writeValueAsString(payload));
+        message.setStatus(OutboxStatusEnum.PENDING);
+        message.setRetryCount(0);
+        message.setCreatedAt(Instant.now());
+        
+        return outboxDao.save(message);
+    }
+    
+    @Override
+    public List<OriginOutboxMessage> findPendingMessages(int limit) {
+        // 不使用此方法，Worker 會直接呼叫 Repository
+        return Collections.emptyList();
+    }
+    
+    @Override
+    public void markAsSent(String outboxId) {
+        outboxDao.markAsSent(outboxId);
+    }
+    
+    @Override
+    public void markAsFailed(String outboxId, String errorMessage) {
+        outboxDao.markAsFailed(outboxId, errorMessage);
+    }
+    
+    @Override
+    public void incrementRetryCount(String outboxId) {
+        outboxDao.incrementRetryCount(outboxId);
+    }
+}
+```
+
+### 5. OriginOutboxWorker (worker)
+
+繼承 `common.OutboxWorkerBase` 抽象類。
+
+```java
+@Component
+public class OriginOutboxWorker extends OutboxWorkerBase<OriginOutboxMessage> {
+    
+    private final OriginOutboxService outboxService;
+    private final OriginOutboxRepository outboxRepository;
+    private final RabbitTemplate rabbitTemplate;
+    
+    @Override
+    protected OutboxService<OriginOutboxMessage> getOutboxService() {
+        return outboxService;
+    }
+    
+    @Override
+    protected OutboxRepository<OriginOutboxMessage> getOutboxRepository() {
+        return outboxRepository;
+    }
+    
+    @Override
+    protected void sendMessage(OriginOutboxMessage message) throws Exception {
+        // 根據 eventType 發送到對應的 exchange/routing key
+        rabbitTemplate.convertAndSend(
+            RabbitMQEnum.ORDER_CREATED.getExchangeName(),
+            RabbitMQEnum.ORDER_CREATED.getRoutingKey(),
+            message.getPayload()
+        );
+    }
+}
+```
+
+### 6. 修改 OriginStoreUsecase
+
+在 `loanApply()` 中寫入 outbox。
+
+```java
+@Transactional
+public void loanApply(LoanApplyReq req) {
+    // 1. 檢查黑名單
+    List<Blacklist> blacklistList = blacklistQueryService.findUserInExist(req.getUserId());
+    if (!blacklistList.isEmpty()) {
+        throw new RuntimeException("User is in blacklist");
+    }
+    
+    // 2. 寫入 outbox (與業務邏輯在同一個事務)
+    outboxService.save(
+        "LOAN_ORDER",                        // aggregateType
+        UUID.randomUUID().toString(),        // aggregateId
+        "ORDER_CREATED",                     // eventType
+        req                                  // payload
+    );
+    
+    // 3. commit 事務 → 返回成功
+}
+```
+
+## 9.3 資料表結構
+
+```sql
+CREATE TABLE origin_outbox_message (
+    outbox_id VARCHAR(64) PRIMARY KEY,
+    aggregate_type VARCHAR(50) NOT NULL,
+    aggregate_id VARCHAR(64) NOT NULL,
+    event_type VARCHAR(50) NOT NULL,
+    payload TEXT NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    retry_count INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL,
+    sent_at TIMESTAMP,
+    error_message VARCHAR(500),
+    INDEX idx_status (status, created_at)
+);
+```
+
+## 9.4 完整流程
+
+```
+POST /origin/apply
+  ├─ 1. checkBlacklist()
+  ├─ 2. outboxService.save()  ← 寫入 origin_outbox_message (status=PENDING)
+  └─ 3. commit 事務 → 返回成功
+
+OriginOutboxWorker (每 5 秒掃描)
+  ├─ 查詢 status = PENDING
+  ├─ rabbitTemplate.send() → RabbitMQ (loan.order.exchange)
+  ├─ 成功 → markAsSent()
+  └─ 失敗 → incrementRetryCount() → 超過 3 次 → markAsFailed()
+```
+
+## 9.5 監控建議
+
+```sql
+-- 待發送訊息數量（應接近 0）
+SELECT COUNT(*) FROM origin_outbox_message WHERE status = 'PENDING';
+
+-- 失敗訊息數量（需警報）
+SELECT COUNT(*) FROM origin_outbox_message WHERE status = 'FAILED';
+
+-- 最舊的待發送訊息（超過 1 分鐘需警報）
+SELECT MIN(created_at) FROM origin_outbox_message WHERE status = 'PENDING';
+```
