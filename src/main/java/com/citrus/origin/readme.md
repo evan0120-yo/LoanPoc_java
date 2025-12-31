@@ -102,6 +102,8 @@
 | `POST /origin/offer/{orderId}` | 查詢核准 Offer | sign, App |
 | `POST /origin/blacklist/add` | 新增黑名單 | 後台 |
 | `POST /origin/blacklist/remove` | 移除黑名單 | 後台 |
+| `POST /origin/blacklist/check` | 檢查是否在黑名單 | origin (內部) |
+| `POST /origin/decision/{orderId}` | 查詢決策詳情 | 後台, loancore |
 
 ---
 
@@ -117,13 +119,98 @@
 >                                       → LSP_ROUTING (終態)
 > ```
 
-### origin 可能存儲的輔助資料 (Phase 2)
+### origin 存儲的輔助資料
 
-| 表 | 說明 |
-|---|------|
-| Blacklist | 黑名單 |
-| DecisionRule | 決策規則配置 |
-| OfferTemplate | Offer 模板 |
+| 表 | 用途 | 優先級 |
+|---|------|-------|
+| **Blacklist** | 黑名單 | P0 |
+| **DecisionAudit** | 決策審計軌跡 | P0 |
+| DecisionRule | 決策規則配置 | P1 (可先 hardcode) |
+| OfferTemplate | Offer 模板 | P2 |
+
+---
+
+### Blacklist (P0)
+
+黑名單表，用於快速拒絕禁止貸款的用戶。
+
+```sql
+Blacklist (
+    blacklistId VARCHAR(64) PRIMARY KEY,
+    identifierType VARCHAR(20) NOT NULL,  -- PAN / AADHAAR / MOBILE
+    identifierValue VARCHAR(100) NOT NULL,
+    reason VARCHAR(500),                  -- 原因
+    addedBy VARCHAR(100),                 -- 誰加入
+    createdAt TIMESTAMP NOT NULL,
+    expiresAt TIMESTAMP,                  -- 可選，永久拉黑則為 NULL
+    INDEX idx_identifier (identifierType, identifierValue)
+)
+```
+
+**欄位說明**：
+- `identifierType`：黑名單類型 (PAN / AADHAAR / MOBILE)
+- `identifierValue`：對應的值
+- `expiresAt`：過期時間，NULL 表示永久拉黑
+
+---
+
+### DecisionAudit (P0)
+
+決策審計軌跡，記錄每次決策的詳細資訊。
+
+```sql
+DecisionAudit (
+    decisionAuditId VARCHAR(64) PRIMARY KEY,
+    loanOrderId VARCHAR(64) NOT NULL,
+    decisionResult VARCHAR(20) NOT NULL,  -- APPROVED / REJECTED / LSP_ROUTING
+    
+    -- 核准資訊 (APPROVED 時才有值)
+    approvedAmount DECIMAL(15,2),
+    approvedRate DECIMAL(5,2),
+    approvedTenure INTEGER,
+    
+    -- 拒絕資訊 (REJECTED 時才有值)
+    rejectReason VARCHAR(50),             -- CIBIL_LOW / FOIR_HIGH / BLACKLIST etc.
+    
+    -- 決策細節
+    ruleName VARCHAR(100),                -- 觸發的規則名稱
+    inputSnapshot TEXT,                   -- 輸入資料快照 (JSON)
+    
+    createdAt TIMESTAMP NOT NULL,
+    INDEX idx_order (loanOrderId)
+)
+```
+
+**欄位說明**：
+- `decisionResult`：決策結果
+  - `APPROVED`：核准
+  - `REJECTED`：拒絕
+  - `LSP_ROUTING`：導流給合作商
+- `approvedAmount`：核准額度 (僅 APPROVED)
+- `approvedRate`：核准利率 (僅 APPROVED)
+- `rejectReason`：拒絕原因代碼 (僅 REJECTED)
+- `ruleName`：觸發的規則名稱 (例如 "CIBIL_THRESHOLD_CHECK")
+- `inputSnapshot`：輸入資料快照，JSON 格式，例如：
+  ```json
+  {
+    "cibil_score": 650,
+    "monthly_income": 30000,
+    "existing_loans": 2,
+    "foir": 0.45
+  }
+  ```
+
+**查詢範例**：
+```sql
+-- 查詢訂單的決策詳情
+SELECT * FROM DecisionAudit WHERE loanOrderId = ?
+
+-- 統計拒絕原因分布
+SELECT rejectReason, COUNT(*) 
+FROM DecisionAudit 
+WHERE decisionResult = 'REJECTED' 
+GROUP BY rejectReason
+```
 
 ---
 
