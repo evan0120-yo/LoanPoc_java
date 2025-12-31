@@ -16,7 +16,7 @@ public class OriginQueryUsecase {
 
     private final BlacklistQueryService blacklistQueryService;
 
-    public List<Blacklist> findByUserId(BlacklistFindUserReq req) {
-        return blacklistQueryService.findByExistUser(req.getUserId());
+    public List<Blacklist> findUser(BlacklistFindUserReq req) {
+        return blacklistQueryService.findUser(req.getUserId());
     }
 }

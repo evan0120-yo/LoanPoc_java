@@ -36,7 +36,7 @@ public class BlacklistDao {
         return blacklistRepository.findById(id);
     }
 
-    public List<Blacklist> findByExistUser(String userId) {
+    public List<Blacklist> findUserInExist(String userId) {
         return blacklistRepository.findByUserIdAndDeletedAt(userId, null);
     }
 

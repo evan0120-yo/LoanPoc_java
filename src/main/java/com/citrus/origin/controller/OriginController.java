@@ -37,7 +37,7 @@ public class OriginController {
 
     @PostMapping(value = "/blacklist/findUser")
     public ResponseEntity<?> findUserBlacklist(@RequestBody BlacklistFindUserReq req) {
-        return ResponseEntity.ok(originQueryUsecase.findByUserId(req));
+        return ResponseEntity.ok(originQueryUsecase.findUser(req));
     }
 
 }

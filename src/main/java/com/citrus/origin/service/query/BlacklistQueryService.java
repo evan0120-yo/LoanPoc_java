@@ -18,7 +18,11 @@ public class BlacklistQueryService {
         return blacklistDao.findById(blacklistId).orElseThrow(() -> new RuntimeException("Blacklist not found"));
     }
 
-    public List<Blacklist> findByExistUser(String userId) {
+    public List<Blacklist> findUser(String userId) {
         return blacklistDao.findByUserId(userId);
+    }
+
+    public List<Blacklist> findUserInExist(String userId) {
+        return blacklistDao.findUserInExist(userId);
     }
 }
