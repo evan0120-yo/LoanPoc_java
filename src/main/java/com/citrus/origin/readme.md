@@ -326,6 +326,14 @@ public class OriginOutboxDao {
         return repository.findById(outboxId).orElse(null);
     }
     
+    public void markAsProcessing(String outboxId) {
+        OriginOutboxMessage message = findById(outboxId);
+        if (message != null) {
+            message.setStatus(OutboxStatusEnum.PROCESSING);
+            repository.save(message);
+        }
+    }
+    
     public void markAsSent(String outboxId) {
         OriginOutboxMessage message = findById(outboxId);
         if (message != null) {
@@ -348,6 +356,8 @@ public class OriginOutboxDao {
         OriginOutboxMessage message = findById(outboxId);
         if (message != null) {
             message.setRetryCount(message.getRetryCount() + 1);
+            // 重試時將狀態改回 PENDING
+            message.setStatus(OutboxStatusEnum.PENDING);
             repository.save(message);
         }
     }
@@ -373,6 +383,8 @@ public class OriginOutboxService implements OutboxService<OriginOutboxMessage> {
         message.setAggregateType(aggregateType);
         message.setAggregateId(aggregateId);
         message.setEventType(eventType);
+        message.setTargetExchange(RabbitMQEnum.ORDER_CREATED.getExchangeName());
+        message.setTargetRoutingKey(RabbitMQEnum.ORDER_CREATED.getRoutingKey());
         message.setPayload(objectMapper.writeValueAsString(payload));
         message.setStatus(OutboxStatusEnum.PENDING);
         message.setRetryCount(0);
@@ -382,9 +394,8 @@ public class OriginOutboxService implements OutboxService<OriginOutboxMessage> {
     }
     
     @Override
-    public List<OriginOutboxMessage> findPendingMessages(int limit) {
-        // 不使用此方法，Worker 會直接呼叫 Repository
-        return Collections.emptyList();
+    public void markAsProcessing(String outboxId) {
+        outboxDao.markAsProcessing(outboxId);
     }
     
     @Override
@@ -428,10 +439,10 @@ public class OriginOutboxWorker extends OutboxWorkerBase<OriginOutboxMessage> {
     
     @Override
     protected void sendMessage(OriginOutboxMessage message) throws Exception {
-        // 根據 eventType 發送到對應的 exchange/routing key
+        // 使用訊息中的路由設定發送到 MQ
         rabbitTemplate.convertAndSend(
-            RabbitMQEnum.ORDER_CREATED.getExchangeName(),
-            RabbitMQEnum.ORDER_CREATED.getRoutingKey(),
+            message.getTargetExchange(),
+            message.getTargetRoutingKey(),
             message.getPayload()
         );
     }
@@ -471,8 +482,10 @@ CREATE TABLE origin_outbox_message (
     aggregate_type VARCHAR(50) NOT NULL,
     aggregate_id VARCHAR(64) NOT NULL,
     event_type VARCHAR(50) NOT NULL,
+    target_exchange VARCHAR(100),          -- 目標 MQ Exchange (可選)
+    target_routing_key VARCHAR(100),       -- 目標 Routing Key (可選)
     payload TEXT NOT NULL,
-    status VARCHAR(20) NOT NULL,
+    status VARCHAR(20) NOT NULL,           -- PENDING / PROCESSING / SENT / FAILED
     retry_count INT NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL,
     sent_at TIMESTAMP,

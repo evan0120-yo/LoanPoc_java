@@ -86,29 +86,32 @@
 public abstract class OutboxMessage {
     @Id
     protected String outboxId;
-    protected String aggregateType;   // 聚合根類型 (LOAN_ORDER, PAYMENT...)
-    protected String aggregateId;     // 聚合根 ID (orderId, paymentId...)
-    protected String eventType;       // 事件類型 (ORDER_CREATED, ORDER_UPDATED...)
-    protected String payload;         // JSON 格式的事件資料
+    protected String aggregateType;    // 聚合根類型 (LOAN_ORDER, PAYMENT...)
+    protected String aggregateId;      // 聚合根 ID (orderId, paymentId...)
+    protected String eventType;        // 事件類型 (ORDER_CREATED, ORDER_UPDATED...)
+    protected String targetExchange;   // 目標 MQ Exchange (可選)
+    protected String targetRoutingKey; // 目標 Routing Key (可選)
+    protected String payload;          // JSON 格式的事件資料
     
     @Enumerated(EnumType.STRING)
-    protected OutboxStatus status;    // PENDING / SENT / FAILED
+    protected OutboxStatusEnum status; // PENDING / PROCESSING / SENT / FAILED
     
-    protected Integer retryCount;     // 重試次數
-    protected Instant createdAt;      // 創建時間
-    protected Instant sentAt;         // 發送時間
-    protected String errorMessage;    // 錯誤訊息（失敗時）
+    protected Integer retryCount;      // 重試次數
+    protected Instant createdAt;       // 創建時間
+    protected Instant sentAt;          // 發送時間
+    protected String errorMessage;     // 錯誤訊息（失敗時）
 }
 ```
 
-#### 2.1.2 OutboxStatus（枚舉）
+#### 2.1.2 OutboxStatusEnum（枚舉）
 
 ```java
-// common/enums/OutboxStatus.java
-public enum OutboxStatus {
-    PENDING,   // 待發送
-    SENT,      // 已發送
-    FAILED     // 失敗（超過重試次數）
+// common/enums/OutboxStatusEnum.java
+public enum OutboxStatusEnum {
+    PENDING,    // 待發送
+    PROCESSING, // 發送中（鎖定狀態，避免重複處理）
+    SENT,       // 已發送
+    FAILED      // 失敗（超過重試次數）
 }
 ```
 
@@ -123,8 +126,8 @@ public interface OutboxService<T extends OutboxMessage> {
     // 儲存 Outbox 訊息
     T save(String aggregateType, String aggregateId, String eventType, Object payload);
     
-    // 查詢待發送訊息
-    List<T> findPendingMessages(int limit);
+    // 標記為處理中（發送前）
+    void markAsProcessing(String outboxId);
     
     // 標記為已發送
     void markAsSent(String outboxId);
@@ -146,15 +149,23 @@ public interface OutboxService<T extends OutboxMessage> {
 public abstract class OutboxWorkerBase<T extends OutboxMessage> {
     
     protected abstract OutboxService<T> getOutboxService();
+    protected abstract OutboxRepository<T> getOutboxRepository();
     protected abstract void sendMessage(T message) throws Exception;
-    protected abstract int getMaxRetryCount();
+    protected int getMaxRetryCount() { return 3; }
+    protected int getBatchSize() { return 100; }
     
-    @Scheduled(fixedDelay = 5000) // 每 5 秒掃一次
+    @Scheduled(fixedDelay = 5000)
+    @Transactional  // 確保 FOR UPDATE 鎖在整個處理過程中有效
     public void processMessages() {
-        List<T> pendingMessages = getOutboxService().findPendingMessages(100);
+        // 使用 Repository 的鎖定查詢（FOR UPDATE SKIP LOCKED）
+        List<T> pendingMessages = getOutboxRepository().findByStatusForUpdate(
+                OutboxStatusEnum.PENDING, PageRequest.of(0, getBatchSize()));
         
         for (T message : pendingMessages) {
             try {
+                // 先標記為處理中（避免重複處理）
+                getOutboxService().markAsProcessing(message.getOutboxId());
+                
                 // 發送訊息（由子類實作）
                 sendMessage(message);
                 
@@ -166,7 +177,7 @@ public abstract class OutboxWorkerBase<T extends OutboxMessage> {
                 getOutboxService().incrementRetryCount(message.getOutboxId());
                 
                 // 檢查是否超過最大重試次數
-                if (message.getRetryCount() >= getMaxRetryCount()) {
+                if (message.getRetryCount() + 1 >= getMaxRetryCount()) {
                     getOutboxService().markAsFailed(message.getOutboxId(), e.getMessage());
                 }
             }

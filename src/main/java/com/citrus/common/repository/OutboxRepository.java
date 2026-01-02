@@ -42,7 +42,7 @@ public interface OutboxRepository<T extends OutboxMessage> extends JpaRepository
      * @return 被鎖定的訊息列表
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @QueryHints({ @QueryHint(name = "javax.persistence.lock.timeout", value = "0") })
+    @QueryHints({ @QueryHint(name = "jakarta.persistence.lock.timeout", value = "0") })
     @Query("SELECT o FROM #{#entityName} o WHERE o.status = :status ORDER BY o.createdAt ASC")
     List<T> findByStatusForUpdate(
             @Param("status") OutboxStatusEnum status,

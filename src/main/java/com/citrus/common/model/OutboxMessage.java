@@ -37,6 +37,12 @@ public abstract class OutboxMessage {
     @Column(name = "event_type", length = 50, nullable = false)
     protected String eventType; // 事件類型 (ORDER_CREATED, ORDER_UPDATED...)
 
+    @Column(name = "target_exchange", length = 100)
+    protected String targetExchange; // 目標 MQ Exchange (可選，讓 Worker 更通用)
+
+    @Column(name = "target_routing_key", length = 100)
+    protected String targetRoutingKey; // 目標 Routing Key (可選)
+
     @Column(name = "payload", columnDefinition = "TEXT", nullable = false)
     protected String payload; // JSON 格式的事件資料
 

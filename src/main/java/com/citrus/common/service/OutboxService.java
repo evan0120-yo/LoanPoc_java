@@ -1,7 +1,5 @@
 package com.citrus.common.service;
 
-import java.util.List;
-
 import com.citrus.common.model.OutboxMessage;
 
 /**
@@ -24,12 +22,11 @@ public interface OutboxService<T extends OutboxMessage> {
     T save(String aggregateType, String aggregateId, String eventType, Object payload);
 
     /**
-     * 查詢待發送訊息
+     * 標記為處理中（發送前）
      * 
-     * @param limit 最多查詢幾筆
-     * @return 待發送訊息列表 (status = PENDING)
+     * @param outboxId Outbox 訊息 ID
      */
-    List<T> findPendingMessages(int limit);
+    void markAsProcessing(String outboxId);
 
     /**
      * 標記為已發送

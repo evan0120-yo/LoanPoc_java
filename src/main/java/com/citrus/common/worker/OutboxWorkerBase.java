@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.citrus.common.enums.OutboxStatusEnum;
 import com.citrus.common.model.OutboxMessage;
@@ -64,8 +65,11 @@ public abstract class OutboxWorkerBase<T extends OutboxMessage> {
      * 
      * 預設每 5 秒執行一次
      * 子類可以覆寫此方法自訂排程
+     * 
+     * 使用 @Transactional 確保 FOR UPDATE 鎖在整個處理過程中有效
      */
     @Scheduled(fixedDelay = 5000)
+    @Transactional
     public void processMessages() {
         OutboxService<T> outboxService = getOutboxService();
 
@@ -83,6 +87,9 @@ public abstract class OutboxWorkerBase<T extends OutboxMessage> {
 
         for (T message : pendingMessages) {
             try {
+                // 先標記為處理中（避免重複處理）
+                outboxService.markAsProcessing(message.getOutboxId());
+
                 // 發送訊息（由子類實作）
                 sendMessage(message);
 
