@@ -8,7 +8,7 @@ import lombok.NoArgsConstructor;
 import java.math.BigDecimal;
 import java.time.Instant;
 
-import org.springframework.data.annotation.Id;
+import jakarta.persistence.Id;
 
 import com.citrus.origin.enums.DecisionResultEnum;
 import com.citrus.origin.enums.RejectReasonEnum;

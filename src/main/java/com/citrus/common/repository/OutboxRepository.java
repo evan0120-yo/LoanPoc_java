@@ -67,15 +67,13 @@ public interface OutboxRepository<T extends OutboxMessage> extends JpaRepository
     /**
      * 清除超時未處理的認領（用於 Server 崩潰後的恢復）
      * 
+     * 注意：各模組需要用 native query 覆寫此方法，因為 INTERVAL 語法是 PostgreSQL 特有的
+     * 
      * @param minutes 超過幾分鐘視為超時
      * @return 清除的筆數
      */
-    @Modifying
-    @Query("""
-            UPDATE #{#entityName} o
-            SET o.status = 'PENDING', o.claimedBy = NULL, o.claimedAt = NULL
-            WHERE o.status = 'PROCESSING'
-            AND o.claimedAt < CURRENT_TIMESTAMP - :minutes * INTERVAL '1 minute'
-            """)
-    int releaseTimedOutClaims(@Param("minutes") int minutes);
+    default int releaseTimedOutClaims(int minutes) {
+        // 各模組需要覆寫此方法，用 native query 實作
+        return 0;
+    }
 }

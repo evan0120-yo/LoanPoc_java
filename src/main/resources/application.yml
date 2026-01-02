@@ -19,3 +19,8 @@ spring:
         format_sql: false
     hibernate: 
       ddl-auto: ${spring.jpa.hibernate.ddl-auto}
+  rabbitmq:
+    host: ${spring.rabbitmq.host}
+    port: ${spring.rabbitmq.port}
+    username: ${spring.rabbitmq.username}
+    password: ${spring.rabbitmq.password}

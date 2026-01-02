@@ -7,7 +7,7 @@ import lombok.NoArgsConstructor;
 
 import java.time.Instant;
 
-import org.springframework.data.annotation.Id;
+import jakarta.persistence.Id;
 
 import com.citrus.origin.enums.IdentifierEnum;
 

@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.springframework.stereotype.Service;
 
+import com.citrus.origin.event.OriginEvent;
 import com.citrus.origin.model.Blacklist;
 import com.citrus.origin.object.req.BlacklistDelReq;
 import com.citrus.origin.object.req.BlacklistSaveReq;
@@ -19,6 +20,7 @@ public class OriginStoreUsecase {
 
     private final BlacklistStoreService blacklistStoreService;
     private final BlacklistQueryService blacklistQueryService;
+    private final OriginEvent originEvent;
 
     public void loanApply(LoanApplyReq req) {
         // 1. check blacklist
@@ -26,8 +28,16 @@ public class OriginStoreUsecase {
         if (!blacklistList.isEmpty()) {
             throw new RuntimeException("User is in blacklist");
         }
-        // 2. outbox > loancore
-
+        // 2. loan apply event → 寫入 Outbox
+        originEvent.loanApplyEvent(
+                req.getUserId(),
+                req.getMobile(),
+                req.getPanNumber(),
+                req.getName(),
+                req.getAppliedAmount(),
+                req.getBankAccount(),
+                req.getIfscCode(),
+                req.getBankName());
     }
 
     public Blacklist saveBlacklist(BlacklistSaveReq req) {

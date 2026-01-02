@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.citrus.origin.object.req.BlacklistDelReq;
 import com.citrus.origin.object.req.BlacklistFindUserReq;
 import com.citrus.origin.object.req.BlacklistSaveReq;
+import com.citrus.origin.object.req.LoanApplyReq;
 import com.citrus.origin.usecase.query.OriginQueryUsecase;
 import com.citrus.origin.usecase.store.OriginStoreUsecase;
 
@@ -38,6 +39,12 @@ public class OriginController {
     @PostMapping(value = "/blacklist/findUser")
     public ResponseEntity<?> findUserBlacklist(@RequestBody BlacklistFindUserReq req) {
         return ResponseEntity.ok(originQueryUsecase.findUser(req));
+    }
+
+    @PostMapping(value = "/loanApply")
+    public ResponseEntity<?> loanApply(@RequestBody LoanApplyReq req) {
+        originStoreUsecase.loanApply(req);
+        return ResponseEntity.ok().build();
     }
 
 }

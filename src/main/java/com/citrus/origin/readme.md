@@ -344,18 +344,16 @@ public class OriginOutboxDao {
 public class OriginOutboxStoreService {
     
     private final OriginOutboxDao outboxDao;
-    private final ObjectMapper objectMapper;
     
-    @SneakyThrows
     public OriginOutbox save(String aggregateType, String aggregateId, 
-                             String eventType, Object payload) {
+                             String eventType, String payload) {  // 直接傳 String
         OriginOutbox outbox = new OriginOutbox();
         outbox.setAggregateType(aggregateType);
         outbox.setAggregateId(aggregateId);
         outbox.setEventType(eventType);
         outbox.setTargetExchange(RabbitMQEnum.ORDER_CREATED.getExchangeName());
         outbox.setTargetRoutingKey(RabbitMQEnum.ORDER_CREATED.getRoutingKey());
-        outbox.setPayload(objectMapper.writeValueAsString(payload));
+        outbox.setPayload(payload);  // 不需要 ObjectMapper
         outbox.setStatus(OutboxStatusEnum.PENDING);
         outbox.setRetryCount(0);
         return outboxDao.save(outbox);
@@ -413,6 +411,7 @@ public class OriginStoreUsecase {
     
     private final BlacklistQueryService blacklistQueryService;
     private final OriginOutboxStoreService outboxStoreService;
+    private final ObjectMapper objectMapper;
     
     @Transactional
     public void loanApply(LoanApplyReq req) {
@@ -423,12 +422,16 @@ public class OriginStoreUsecase {
         }
         
         // 2. 寫入 outbox (與業務邏輯在同一個事務)
-        outboxStoreService.save(
-            "LOAN_ORDER",                        // aggregateType
-            UUID.randomUUID().toString(),        // aggregateId
-            "ORDER_CREATED",                     // eventType
-            req                                  // payload
-        );
+        try {
+            outboxStoreService.save(
+                "LOAN_ORDER",
+                UUID.randomUUID().toString(),
+                "ORDER_CREATED",
+                objectMapper.writeValueAsString(req)
+            );
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to serialize payload", e);
+        }
         
         // 3. commit 事務 → 返回成功
     }

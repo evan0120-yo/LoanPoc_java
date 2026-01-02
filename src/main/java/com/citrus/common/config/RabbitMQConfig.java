@@ -8,41 +8,50 @@ import org.springframework.amqp.core.FanoutExchange;
 import org.springframework.amqp.core.HeadersExchange;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.TopicExchange;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
-import org.springframework.beans.factory.InitializingBean;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import com.citrus.share.enums.ExchangeTypeEnum;
 import com.citrus.share.enums.RabbitMQEnum;
 
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 
 @Configuration
 @RequiredArgsConstructor
-public class RabbitMQConfig implements InitializingBean {
+public class RabbitMQConfig {
 
-    private final RabbitAdmin rabbitAdmin;
+    private final ConnectionFactory connectionFactory;
+
+    @Bean
+    public RabbitAdmin rabbitAdmin() {
+        return new RabbitAdmin(connectionFactory);
+    }
 
     /**
-     * 這個方法會在 Spring Bean 初始化完成後自動執行
+     * 在所有 Bean 初始化完成後自動執行
      * 自動掃描 RabbitMQEnum 並創建 Exchange、Queue 和 Binding
      */
-    @Override
-    public void afterPropertiesSet() {
+    @PostConstruct
+    public void declareRabbitMQResources() {
+        RabbitAdmin admin = new RabbitAdmin(connectionFactory);
+
         for (RabbitMQEnum mq : RabbitMQEnum.values()) {
             // 1. 創建 Exchange
             Exchange exchange = createExchange(mq);
-            rabbitAdmin.declareExchange(exchange);
+            admin.declareExchange(exchange);
 
             // 2. 創建 Queue 和 Binding
-            for (String queueName : mq.getQueueMap().values()) {
+            for (String queueName : mq.getQueueList()) {
                 // 創建 Queue (durable = true)
                 Queue queue = new Queue(queueName, true);
-                rabbitAdmin.declareQueue(queue);
+                admin.declareQueue(queue);
 
                 // 創建 Binding
                 Binding binding = createBinding(queue, exchange, mq);
-                rabbitAdmin.declareBinding(binding);
+                admin.declareBinding(binding);
             }
         }
     }
