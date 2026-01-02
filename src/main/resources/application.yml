@@ -16,7 +16,7 @@ spring:
     show-sql: ${spring.jpa.properties.hibernate.show_sql}
     properties:
       hibernate:
-        format_sql: false
+        "[format_sql]": false
     hibernate: 
       ddl-auto: ${spring.jpa.hibernate.ddl-auto}
   rabbitmq:

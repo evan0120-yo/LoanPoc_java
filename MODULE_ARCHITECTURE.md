@@ -73,8 +73,9 @@ origin.readme 說：
 
 ```
 ┌──────────┐         ┌──────────────┐
-│ loancron │────────▶│   loancore   │ 1. 查詢 PENDING 訂單
-└──────────┘         │              │ 2. 呼叫 bureau
+│ loancron │────MQ──▶│   loancore   │ 1. 收到觸發訊號
+└──────────┘         │              │ 2. 自己查詢 PENDING 訂單
+                     │              │ 3. 呼叫 bureau
                      └──────┬───────┘
                             │
                      ┌──────▼───────┐
@@ -200,7 +201,7 @@ origin.readme 說：
 |------|------|------|------|
 | 前端 → origin | origin | **同步 HTTP** | 需要立即回應 |
 | origin → loancore | loancore | **同步 HTTP** | 立刻建單 (status=PENDING) |
-| loancron → loancore | loancore | **MQ** | 查詢待處理訂單 |
+| loancron → loancore | loancore | **MQ** | 觸發審核流程（loancore 自己查詢 PENDING 訂單）|
 | loancore → bureau | bureau | **同步 HTTP** | 徵信查詢 |
 | loancore → origin | origin | **同步 HTTP** | 請求決策評估 |
 | origin → loancore | loancore | **同步 HTTP** | 回傳決策結果，更新狀態 |
@@ -222,9 +223,9 @@ origin.readme 說：
 
 | ✅ 正確職責 | ❌ 錯誤職責 |
 |------------|------------|
-| 定時觸發審批流程 | 存儲用戶申請資料 |
-| 日切計息 / 逾期檢測 | 直接處理業務邏輯 |
-| 發 MQ 給其他模組 | 直接調用 DB |
+| 定時發觸發訊號 | 查詢其他模組的資料 |
+| 日切計息 / 逾期檢測觸發 | 存儲用戶申請資料 |
+| 發 MQ 給其他模組（不帶業務資料）| 直接處理業務邏輯 |
 
 ### loancron 的排程任務
 
