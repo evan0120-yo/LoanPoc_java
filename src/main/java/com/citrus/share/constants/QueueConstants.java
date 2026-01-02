@@ -9,10 +9,6 @@ public class QueueConstants {
     // ========== LOANCORE ==========
     public static final String LOANCORE_ORDER_CREATED = "loancore.order.created.queue";
 
-    // ========== ORIGIN ==========
-    // public static final String ORIGIN_ORDER_UPDATED =
-    // "origin.order.updated.queue";
-
-    // ========== SIGN ==========
-    // public static final String SIGN_ORDER_UPDATED = "sign.order.updated.queue";
+    // ========== LOANCRON ==========
+    public static final String LOANCORE_REVIEW_ORDER = "loancore.order.review.queue";
 }

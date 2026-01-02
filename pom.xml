@@ -81,6 +81,18 @@
 		    <artifactId>gson</artifactId>
 		    <version>2.11.0</version>
 		</dependency>
+		<!-- ShedLock - 分散式排程鎖，確保多台 Server 只有一台執行排程任務 -->
+		<dependency>
+		    <groupId>net.javacrumbs.shedlock</groupId>
+		    <artifactId>shedlock-spring</artifactId>
+		    <version>5.10.0</version>
+		</dependency>
+		<!-- ShedLock - DB 版本 (POC/開發用)，生產環境可換成 shedlock-provider-redis-spring -->
+		<dependency>
+		    <groupId>net.javacrumbs.shedlock</groupId>
+		    <artifactId>shedlock-provider-jdbc-template</artifactId>
+		    <version>5.10.0</version>
+		</dependency>
 	</dependencies>
 
 	<build>

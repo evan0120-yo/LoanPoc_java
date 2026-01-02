@@ -1,7 +1,5 @@
 package com.citrus.origin.service.schedule;
 
-import java.util.UUID;
-
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
 
