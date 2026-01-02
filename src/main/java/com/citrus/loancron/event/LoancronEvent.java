@@ -4,7 +4,6 @@ import java.time.Instant;
 
 import org.springframework.stereotype.Component;
 
-import com.citrus.loancron.object.dto.ReviewOrderEventDto;
 import com.citrus.loancron.service.store.LoancronOutboxStoreService;
 import com.citrus.share.enums.RabbitMQEnum;
 import com.google.gson.Gson;
@@ -14,7 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * Loancron 事件發送器
- * 將事件寫入 Outbox，由排程服務發送到 MQ
+ * 只負責發送觸發訊號，不攜帶業務資料
  */
 @Component
 @RequiredArgsConstructor
@@ -25,24 +24,27 @@ public class LoancronEvent {
     private final Gson gson;
 
     /**
-     * 發送審核訂單事件
-     * 
-     * @param orderId 訂單 ID
+     * 發送「開始審核 PENDING 訂單」觸發訊號
+     * 不包含任何 orderId，loancore 收到後自己查詢
      */
-    public void reviewOrderEvent(String orderId) {
-        log.info("Sending review order event for orderId: {}", orderId);
+    public void triggerReviewEvent() {
+        log.info("Sending trigger review event");
 
-        ReviewOrderEventDto dto = ReviewOrderEventDto.builder()
-                .orderId(orderId)
-                .triggerAt(Instant.now())
-                .build();
+        // 只發送觸發時間，不帶業務資料
+        TriggerEventPayload payload = new TriggerEventPayload(Instant.now());
 
         outboxStoreService.save(
                 RabbitMQEnum.REVIEW_ORDER.getAggregateType(),
-                orderId,
+                "TRIGGER", // aggregateId 用固定值
                 RabbitMQEnum.REVIEW_ORDER.name(),
-                gson.toJson(dto));
+                gson.toJson(payload));
 
-        log.info("Review order event saved to outbox for orderId: {}", orderId);
+        log.info("Trigger review event saved to outbox");
+    }
+
+    /**
+     * 簡單的觸發訊號 payload
+     */
+    private record TriggerEventPayload(Instant triggerAt) {
     }
 }

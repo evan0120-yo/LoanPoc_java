@@ -1,12 +1,9 @@
 package com.citrus.loancron.scheduler;
 
-import java.util.List;
-
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import com.citrus.loancron.event.LoancronEvent;
-import com.citrus.loancron.service.query.LoancronQueryService;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -15,42 +12,29 @@ import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 /**
  * 待審批訂單排程器
  * 
- * 每 5 分鐘掃描 PENDING 狀態的訂單，發送 MQ 讓 loancore 處理
+ * 只負責定時發送「開始審核」訊號給 loancore
+ * loancore 收到後會自己查詢並處理 PENDING 訂單
  */
 @Component
 @RequiredArgsConstructor
 @Slf4j
 public class PendingOrderScheduler {
 
-    private final LoancronQueryService queryService;
     private final LoancronEvent loancronEvent;
 
     /**
-     * 每 5 分鐘處理 PENDING 訂單
+     * 每 20 秒發送「開始審核」訊號（測試用，生產改回 5 分鐘）
      * 
-     * @SchedulerLock 確保多台 Server 只有一台執行：
-     *                - name: 鎖的名稱（唯一）
-     *                - lockAtLeastFor: 最少鎖多久（防止執行太快重複觸發）
-     *                - lockAtMostFor: 最多鎖多久（防止 Server 崩潰鎖永遠不釋放）
+     * @SchedulerLock 確保多台 Server 只有一台執行
      */
-    @Scheduled(fixedDelay = 300000) // 每 5 分鐘
-    @SchedulerLock(name = "processPendingOrders", lockAtLeastFor = "4m", lockAtMostFor = "5m")
-    public void processPendingOrders() {
-        log.info("=== Start Processing Pending Orders ===");
+    @Scheduled(fixedDelay = 20000) // 每 20 秒（測試用，生產改回 5 分鐘）
+    @SchedulerLock(name = "processPendingOrders", lockAtLeastFor = "15s", lockAtMostFor = "20s")
+    public void triggerPendingOrderReview() {
+        log.info("=== Trigger Pending Order Review ===");
 
-        List<String> pendingOrderIds = queryService.findPendingOrderIds();
+        // 只發送觸發訊號，不查詢任何 loancore 資料
+        loancronEvent.triggerReviewEvent();
 
-        if (pendingOrderIds.isEmpty()) {
-            log.info("No pending orders found");
-            return;
-        }
-
-        log.info("Found {} pending orders to review", pendingOrderIds.size());
-
-        for (String orderId : pendingOrderIds) {
-            loancronEvent.reviewOrderEvent(orderId);
-        }
-
-        log.info("=== End Processing Pending Orders ===");
+        log.info("=== Trigger Sent ===");
     }
 }
