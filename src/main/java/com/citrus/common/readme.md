@@ -34,33 +34,34 @@
 - ✅ 支援失敗重試
 - ✅ 提供審計軌跡
 
-### 架構設計
+### 架構設計（符合三層+1層架構）
 
 ```
          ┌─────────────────────────────────────────┐
-         │         Business Module                 │
-         │  (origin, loancore, pay, sign...)       │
+         │          Usecase 層                       │
+         │  (OriginStoreUsecase)                     │
+         │  1. 執行業務邏輯                             │
+         │  2. 寫入 Outbox (同一個事務)                 │
          └─────────────────┬───────────────────────┘
                            │
-                           │ 1. 執行業務邏輯
-                           │ 2. 寫入 Outbox (同一個事務)
-                           │
          ┌─────────────────▼───────────────────────┐
-         │          OutboxMessage Table            │
-         │  (各模組有自己的 outbox_message 表)     │
+         │          Service 層                       │
+         │  store/XxxOutboxStoreService  (寫入)       │
+         │  query/XxxOutboxScheduleService (排程發送) │
          └─────────────────┬───────────────────────┘
                            │
-                           │ 3. OutboxWorker 定時掃描
-                           │
          ┌─────────────────▼───────────────────────┐
-         │            OutboxWorker                 │
-         │   (繼承 OutboxWorkerBase 抽象類)        │
+         │          Dao 層                           │
+         │  (XxxOutboxDao)                           │
          └─────────────────┬───────────────────────┘
                            │
-                           │ 4. 發送到 MQ
-                           │
          ┌─────────────────▼───────────────────────┐
-         │          Message Queue (RabbitMQ)       │
+         │          Repository 層                    │
+         │  (XxxOutboxRepository)                    │
+         └─────────────────┬───────────────────────┘
+                           │ @Scheduled 排程發送
+         ┌─────────────────▼───────────────────────┐
+         │          Message Queue (RabbitMQ)         │
          └─────────────────────────────────────────┘
 ```
 
@@ -99,6 +100,8 @@ public abstract class OutboxMessage {
     protected Integer retryCount;      // 重試次數
     protected Instant createdAt;       // 創建時間
     protected Instant sentAt;          // 發送時間
+    protected String claimedBy;        // 認領的 Server ID
+    protected Instant claimedAt;       // 認領時間
     protected String errorMessage;     // 錯誤訊息（失敗時）
 }
 ```
@@ -115,179 +118,233 @@ public enum OutboxStatusEnum {
 }
 ```
 
-#### 2.1.3 OutboxService（抽象服務）
+#### 2.1.3 OutboxService（服務介面）
 
-提供通用的 Outbox 操作方法。
+提供業務邏輯層寫入 Outbox 的方法。
 
 ```java
 // common/service/OutboxService.java
 public interface OutboxService<T extends OutboxMessage> {
-    
-    // 儲存 Outbox 訊息
+    // 儲存 Outbox 訊息（與業務邏輯在同一個事務中）
     T save(String aggregateType, String aggregateId, String eventType, Object payload);
-    
-    // 標記為處理中（發送前）
-    void markAsProcessing(String outboxId);
-    
-    // 標記為已發送
-    void markAsSent(String outboxId);
-    
-    // 標記為失敗
-    void markAsFailed(String outboxId, String errorMessage);
-    
-    // 增加重試次數
-    void incrementRetryCount(String outboxId);
 }
 ```
 
-#### 2.1.4 OutboxWorkerBase（抽象 Worker）
+> **注意**：Worker 直接透過 Repository 處理狀態更新，此介面僅提供業務層寫入功能。
 
-提供通用的 Outbox Worker 邏輯，各模組繼承並實作發送邏輯。
+#### 2.1.4 OutboxRepository（通用 Repository）
+
+提供 Claim-and-Process 模式的核心方法。
 
 ```java
-// common/worker/OutboxWorkerBase.java
-public abstract class OutboxWorkerBase<T extends OutboxMessage> {
+// common/repository/OutboxRepository.java
+@NoRepositoryBean
+public interface OutboxRepository<T extends OutboxMessage> extends JpaRepository<T, String> {
     
-    protected abstract OutboxService<T> getOutboxService();
+    // 認領待發送訊息（原子操作）
+    @Modifying
+    @Query("UPDATE ... SET status='PROCESSING', claimedBy=:processorId ...")
+    int claimMessages(@Param("processorId") String processorId);
+    
+    // 查詢已認領的訊息
+    List<T> findByClaimedByAndStatus(String claimedBy, OutboxStatusEnum status);
+    
+    // 清除超時未處理的認領（Server 崩潰後恢復）
+    @Modifying
+    int releaseTimedOutClaims(@Param("minutes") int minutes);
+}
+```
+
+#### 2.1.5 OutboxScheduleService（排程發送服務基類）
+
+採用 Claim-and-Process 模式，各模組繼承此類放在 `service/schedule/` 路徑。
+
+```java
+// common/service/OutboxScheduleService.java
+public abstract class OutboxScheduleService<T extends OutboxMessage> {
+    
     protected abstract OutboxRepository<T> getOutboxRepository();
+    protected abstract String getProcessorId();  // Server 唯一 ID
     protected abstract void sendMessage(T message) throws Exception;
     protected int getMaxRetryCount() { return 3; }
-    protected int getBatchSize() { return 100; }
     
     @Scheduled(fixedDelay = 5000)
-    @Transactional  // 確保 FOR UPDATE 鎖在整個處理過程中有效
+    @Transactional
     public void processMessages() {
-        // 使用 Repository 的鎖定查詢（FOR UPDATE SKIP LOCKED）
-        List<T> pendingMessages = getOutboxRepository().findByStatusForUpdate(
-                OutboxStatusEnum.PENDING, PageRequest.of(0, getBatchSize()));
+        OutboxRepository<T> repo = getOutboxRepository();
+        String processorId = getProcessorId();
         
-        for (T message : pendingMessages) {
+        // Step 1: Claim - 認領訊息（原子操作）
+        int claimed = repo.claimMessages(processorId);
+        if (claimed == 0) return;
+        
+        // Step 2: Find - 查詢已認領的訊息
+        List<T> messages = repo.findByClaimedByAndStatus(processorId, PROCESSING);
+        
+        // Step 3: Send and Update
+        for (T msg : messages) {
             try {
-                // 先標記為處理中（避免重複處理）
-                getOutboxService().markAsProcessing(message.getOutboxId());
-                
-                // 發送訊息（由子類實作）
-                sendMessage(message);
-                
-                // 標記為已發送
-                getOutboxService().markAsSent(message.getOutboxId());
-                
+                sendMessage(msg);
+                msg.setStatus(SENT);
+                msg.setSentAt(Instant.now());
             } catch (Exception e) {
-                // 增加重試次數
-                getOutboxService().incrementRetryCount(message.getOutboxId());
-                
-                // 檢查是否超過最大重試次數
-                if (message.getRetryCount() + 1 >= getMaxRetryCount()) {
-                    getOutboxService().markAsFailed(message.getOutboxId(), e.getMessage());
+                msg.setRetryCount(msg.getRetryCount() + 1);
+                if (msg.getRetryCount() >= getMaxRetryCount()) {
+                    msg.setStatus(FAILED);
+                } else {
+                    msg.setStatus(PENDING);  // 放回重試
+                    msg.setClaimedBy(null);
                 }
             }
+            repo.save(msg);
         }
+    }
+    
+    @Scheduled(fixedDelay = 60000)  // 每分鐘清理超時認領
+    @Transactional
+    public void releaseTimedOutClaims() {
+        getOutboxRepository().releaseTimedOutClaims(5);  // 5 分鐘超時
     }
 }
 ```
 
 ---
 
-## 2.2 各模組如何使用
+## 2.2 各模組如何使用（符合三層+1層架構）
 
-### 步驟 1：創建自己的 OutboxMessage 表
+### 步驟 1：創建 Model
 
 ```java
-// origin/model/OriginOutboxMessage.java
+// origin/model/OriginOutbox.java
 @Entity
-@Table(name = "origin_outbox_message")
-public class OriginOutboxMessage extends OutboxMessage {
-    // 繼承 OutboxMessage，可加入模組特定欄位
+@Table(name = "origin_outbox")
+@NoArgsConstructor
+public class OriginOutbox extends OutboxMessage {
+    // 繼承 OutboxMessage，可加入模組特有欄位
 }
 ```
 
-### 步驟 2：實作 OutboxService
+### 步驟 2：創建 Repository
 
 ```java
-// origin/service/OriginOutboxService.java
-@Service
-public class OriginOutboxService implements OutboxService<OriginOutboxMessage> {
-    
-    @Autowired
-    private OriginOutboxRepository repository;
-    
-    @Override
-    public OriginOutboxMessage save(String aggregateType, String aggregateId, 
-                                     String eventType, Object payload) {
-        OriginOutboxMessage message = new OriginOutboxMessage();
-        message.setOutboxId(UUID.randomUUID().toString());
-        message.setAggregateType(aggregateType);
-        message.setAggregateId(aggregateId);
-        message.setEventType(eventType);
-        message.setPayload(objectMapper.writeValueAsString(payload));
-        message.setStatus(OutboxStatus.PENDING);
-        message.setRetryCount(0);
-        message.setCreatedAt(Instant.now());
-        
-        return repository.save(message);
-    }
-    
-    // ... 其他方法實作
+// origin/repository/OriginOutboxRepository.java
+public interface OriginOutboxRepository extends OutboxRepository<OriginOutbox> {
+    // 自動繼承 claimMessages(), findByClaimedByAndStatus() 等方法
 }
 ```
 
-### 步驟 3：實作 OutboxWorker
+### 步驟 3：創建 Dao
 
 ```java
-// origin/worker/OriginOutboxWorker.java
+// origin/dao/OriginOutboxDao.java
 @Component
-public class OriginOutboxWorker extends OutboxWorkerBase<OriginOutboxMessage> {
+@RequiredArgsConstructor
+public class OriginOutboxDao {
     
-    @Autowired
-    private OriginOutboxService outboxService;
+    private final OriginOutboxRepository repository;
     
-    @Autowired
-    private RabbitTemplate rabbitTemplate;
+    public OriginOutbox save(OriginOutbox outbox) {
+        outbox.setOutboxId(Generators.defaultTimeBasedGenerator().generate().toString());
+        outbox.setCreatedAt(Instant.now());
+        return repository.save(outbox);
+    }
+    
+    public OriginOutbox findById(String id) {
+        return repository.findById(id).orElse(null);
+    }
+}
+```
+
+### 步驟 4：創建 Service (store)
+
+```java
+// origin/service/store/OriginOutboxStoreService.java
+@Service
+@RequiredArgsConstructor
+public class OriginOutboxStoreService {
+    
+    private final OriginOutboxDao outboxDao;
+    private final ObjectMapper objectMapper;
+    
+    @SneakyThrows
+    public OriginOutbox save(String aggregateType, String aggregateId, 
+                             String eventType, Object payload) {
+        OriginOutbox outbox = new OriginOutbox();
+        outbox.setAggregateType(aggregateType);
+        outbox.setAggregateId(aggregateId);
+        outbox.setEventType(eventType);
+        outbox.setPayload(objectMapper.writeValueAsString(payload));
+        outbox.setStatus(OutboxStatusEnum.PENDING);
+        outbox.setRetryCount(0);
+        return outboxDao.save(outbox);
+    }
+}
+```
+
+### 步驟 5：創建 Service (schedule)
+
+```java
+// origin/service/schedule/OriginOutboxScheduleService.java
+@Service
+@RequiredArgsConstructor
+public class OriginOutboxScheduleService extends OutboxScheduleService<OriginOutbox> {
+    
+    private final OriginOutboxRepository outboxRepository;
+    private final RabbitTemplate rabbitTemplate;
+    
+    @Value("${outbox.processor-id:origin-${random.uuid}}")
+    private String processorId;
     
     @Override
-    protected OutboxService<OriginOutboxMessage> getOutboxService() {
-        return outboxService;
+    protected OutboxRepository<OriginOutbox> getOutboxRepository() {
+        return outboxRepository;
     }
     
     @Override
-    protected void sendMessage(OriginOutboxMessage message) throws Exception {
-        // 根據 eventType 發送到不同的 exchange/routing key
+    protected String getProcessorId() {
+        return processorId;
+    }
+    
+    @Override
+    protected void sendMessage(OriginOutbox message) throws Exception {
         rabbitTemplate.convertAndSend(
-            "loan.order.exchange",
-            message.getEventType(),
+            message.getTargetExchange(),
+            message.getTargetRoutingKey(),
             message.getPayload()
         );
     }
-    
-    @Override
-    protected int getMaxRetryCount() {
-        return 3; // 最多重試 3 次
-    }
 }
 ```
 
-### 步驟 4：在業務邏輯中使用
+### 步驟 6：在 Usecase 中使用
 
 ```java
-// origin/usecase/LoanApplyUsecase.java
-@Transactional
-public String applyLoan(LoanApplyReq req) {
-    // 1. 檢查黑名單
-    checkBlacklist(req);
+// origin/usecase/store/OriginStoreUsecase.java
+@Service
+@RequiredArgsConstructor
+public class OriginStoreUsecase {
     
-    // 2. 生成 orderId
-    String orderId = UUID.randomUUID().toString();
+    private final BlacklistQueryService blacklistQueryService;
+    private final OriginOutboxStoreService outboxStoreService;
     
-    // 3. 寫入 Outbox（與業務邏輯在同一個事務）
-    outboxService.save(
-        "LOAN_ORDER",           // aggregateType
-        orderId,                // aggregateId
-        "ORDER_CREATED",        // eventType
-        req                     // payload
-    );
-    
-    // 4. commit 事務後，返回 orderId
-    return orderId;
+    @Transactional
+    public void loanApply(LoanApplyReq req) {
+        // 1. 檢查黑名單
+        List<Blacklist> blacklistList = blacklistQueryService.findUserInExist(req.getUserId());
+        if (!blacklistList.isEmpty()) {
+            throw new RuntimeException("User is in blacklist");
+        }
+        
+        // 2. 寫入 Outbox（與業務邏輯在同一個事務）
+        outboxStoreService.save(
+            "LOAN_ORDER",                    // aggregateType
+            UUID.randomUUID().toString(),    // aggregateId
+            "ORDER_CREATED",                 // eventType
+            req                              // payload
+        );
+        
+        // 3. commit 事務 → 返回成功
+    }
 }
 ```
 
@@ -335,7 +392,7 @@ CREATE TABLE loancore_outbox_message (
 
 1. **展示架構設計能力**：給乙方看如何抽象通用邏輯
 2. **靈活性**：各模組可以根據需求自訂（MQ、序列化方式）
-3. **最佳實踐**：避免「上帝 Service」，保持單一職責
+3. **符合三層架構**：Usecase → Service → Dao → Repository
 
 ---
 
@@ -357,13 +414,27 @@ CREATE TABLE loancore_outbox_message (
 ```
 common/
 ├─ enums/
-│  └─ OutboxStatus.java
+│  └─ OutboxStatusEnum.java
 ├─ model/
 │  └─ OutboxMessage.java (抽象基類)
-├─ service/
-│  └─ OutboxService.java (介面)
-└─ worker/
-   └─ OutboxWorkerBase.java (抽象類)
+├─ repository/
+│  └─ OutboxRepository.java (通用介面)
+└─ service/
+   └─ OutboxScheduleService.java (排程發送基類)
+
+# 各模組實作範例 (origin)
+origin/
+├─ model/
+│  └─ OriginOutbox.java
+├─ repository/
+│  └─ OriginOutboxRepository.java
+├─ dao/
+│  └─ OriginOutboxDao.java
+└─ service/
+   ├─ store/
+   │  └─ OriginOutboxStoreService.java
+   └─ schedule/
+      └─ OriginOutboxScheduleService.java
 ```
 
 ---

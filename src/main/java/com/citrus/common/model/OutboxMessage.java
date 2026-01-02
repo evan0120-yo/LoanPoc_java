@@ -59,6 +59,12 @@ public abstract class OutboxMessage {
     @Column(name = "sent_at")
     protected Instant sentAt; // 發送時間
 
+    @Column(name = "claimed_by", length = 100)
+    protected String claimedBy; // 認領的 Server ID (e.g., "origin-server-1")
+
+    @Column(name = "claimed_at")
+    protected Instant claimedAt; // 認領時間
+
     @Column(name = "error_message", length = 500)
     protected String errorMessage; // 錯誤訊息（失敗時）
 }
