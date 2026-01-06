@@ -13,7 +13,7 @@ public enum RabbitMQEnum {
 
         // 訂單創建事件
         ORDER_CREATED(
-                        "LOAN_ORDER",
+                        "ORIGIN",
                         "loan.order.exchange",
                         ExchangeTypeEnum.TOPIC,
                         List.of(
@@ -22,12 +22,20 @@ public enum RabbitMQEnum {
                         "order.created"),
 
         REVIEW_ORDER(
-                        "LOAN_ORDER",
+                        "LOANCRON",
                         "loan.review.exchange",
                         ExchangeTypeEnum.TOPIC,
                         List.of(
                                         QueueConstants.LOANCORE_REVIEW_ORDER),
                         "order.review"),
+
+        PENDING_ORDER(
+                        "LOANCORE",
+                        "loan.pending.exchange",
+                        ExchangeTypeEnum.TOPIC,
+                        List.of(
+                                        QueueConstants.BUREAU_PENDING_ORDER),
+                        "order.pending"),
 
         // // 訂單狀態更新
         // ORDER_UPDATED(

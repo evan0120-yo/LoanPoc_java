@@ -48,4 +48,14 @@ public class LoanOrderDao {
         return loanOrderRepository.findByUserId(userId);
     }
 
+    public List<LoanOrder> findByLoanState(LoanStateEnum loanState) {
+        return loanOrderRepository.findByLoanState(loanState);
+    }
+
+    /**
+     * 認領 PENDING 訂單（使用 FOR UPDATE SKIP LOCKED）
+     */
+    public List<LoanOrder> claimPendingOrders(int limit) {
+        return loanOrderRepository.claimPendingOrders(limit);
+    }
 }

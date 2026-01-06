@@ -11,4 +11,5 @@ public class QueueConstants {
 
     // ========== LOANCRON ==========
     public static final String LOANCORE_REVIEW_ORDER = "loancore.order.review.queue";
+    public static final String BUREAU_PENDING_ORDER = "bureau.order.pending.queue";
 }
