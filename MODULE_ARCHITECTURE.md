@@ -200,9 +200,9 @@ origin.readme 說：
 | 來源 | 目標 | 方式 | 原因 |
 |------|------|------|------|
 | 前端 → origin | origin | **同步 HTTP** | 需要立即回應 |
-| origin → loancore | loancore | **同步 HTTP** | 立刻建單 (status=PENDING) |
-| loancron → loancore | loancore | **MQ** | 觸發審核流程（loancore 自己查詢 PENDING 訂單）|
-| loancore → bureau | bureau | **同步 HTTP** | 徵信查詢 |
+| origin → loancore | loancore | **MQ (Outbox)** | 可靠建單 |
+| loancron → loancore | loancore | **MQ (Outbox)** | 觸發審核流程（loancore 自己查詢 PENDING 訂單）|
+| loancore → bureau | bureau | **MQ (Outbox)** | 可靠發送，使用 Claim-and-Process 避免重複 |
 | loancore → origin | origin | **同步 HTTP** | 請求決策評估 |
 | origin → loancore | loancore | **同步 HTTP** | 回傳決策結果，更新狀態 |
 | loancore → lsp | lsp | **MQ** | 非同步導流 |

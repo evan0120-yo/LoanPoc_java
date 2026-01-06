@@ -42,25 +42,18 @@
 
 ```
 ┌──────────┐         ┌──────────────┐
-│ loancron │────────▶│   loancore   │ 1. 查詢 PENDING 訂單
-└──────────┘         │              │ 2. 呼叫 bureau
+│ loancron │────MQ──▶│   loancore   │ 1. 收到觸發訊號
+└──────────┘         │              │ 2. claimPendingOrders (FOR UPDATE SKIP LOCKED)
+                     │              │ 3. 更新狀態為 BUREAU_CHECK
+                     │              │ 4. 寫入 Outbox
                      └──────┬───────┘
                             │
                      ┌──────▼───────┐
-                     │    bureau    │ 收集資料
+                     │ Outbox Worker│ 定時發送 MQ
                      └──────┬───────┘
                             │
                      ┌──────▼───────┐
-                     │   loancore   │ 3. 更新 BUREAU_CHECK
-                     │              │ 4. 呼叫 origin
-                     └──────┬───────┘
-                            │
-                     ┌──────▼───────┐
-                     │    origin    │ 決策引擎
-                     └──────┬───────┘
-                            │
-                     ┌──────▼───────┐
-                     │   loancore   │ 5. 更新狀態
+                     │    bureau    │ 收集資料 (TODO)
                      └──────────────┘
 ```
 
@@ -155,8 +148,9 @@ LoanOrderHistory (
 ```
 
 **通訊方式：**
-- origin → loancore：**同步 HTTP**（立刻建單）
-- loancore → bureau/origin/sign/pay：**同步 HTTP**
+- origin → loancore：**MQ (Outbox)**（可靠建單）
+- loancore → bureau：**MQ (Outbox)**（可靠發送）
+- loancore → origin/sign/pay：**同步 HTTP**（關鍵路徑）
 - sign/pay → loancore：**MQ**（狀態更新）
 - loancore → lsp：**MQ**（導流）
 
@@ -173,7 +167,60 @@ LoanOrderHistory (
 
 ---
 
-# 8. 微服務切分
+# 8. Outbox Pattern 實作 (已實作)
+
+## 8.1 設計目標
+
+使用 Outbox Pattern 確保 loancore → bureau 的訊息可靠性：
+- ✅ 保證訊息不遺失
+- ✅ 保證本地事務和訊息發送的原子性
+- ✅ 支援失敗重試
+- ✅ 使用 Claim-and-Process 避免多台 Server 重複處理
+
+## 8.2 Claim-and-Process 模式
+
+處理 PENDING 訂單時，使用 `FOR UPDATE SKIP LOCKED` 避免多台 Server 重複處理：
+
+```java
+@Query(value = """
+    SELECT * FROM loan_order
+    WHERE loan_state = 'PENDING'
+    ORDER BY created_at ASC
+    FOR UPDATE SKIP LOCKED
+    LIMIT :limit
+    """, nativeQuery = true)
+List<LoanOrder> claimPendingOrders(@Param("limit") int limit);
+```
+
+## 8.3 完整流程
+
+```
+@Transactional
+1. claimPendingOrders(100)       ← FOR UPDATE SKIP LOCKED 認領
+2. updateState(BUREAU_CHECK)     ← 更新狀態（同一個 Transaction）
+3. outboxStoreService.saveAll()  ← 批次寫入 Outbox
+4. commit                        ← 釋放鎖，狀態已不是 PENDING
+
+Outbox Worker (每 5 秒)
+1. claimMessages()               ← 認領 Outbox 訊息
+2. rabbitTemplate.send()         ← 發送到 MQ
+3. update status = SENT          ← 標記已發送
+```
+
+## 8.4 實作檔案
+
+| 檔案 | 用途 |
+|-----|------|
+| `model/LoancoreOutbox.java` | Outbox Entity |
+| `repository/LoancoreOutboxRepository.java` | Outbox Repository |
+| `dao/LoancoreOutboxDao.java` | DAO 層 |
+| `service/store/LoancoreOutboxStoreService.java` | 寫入 Outbox |
+| `service/schedule/LoancoreOutboxScheduleService.java` | 排程發送 |
+| `event/LoancoreEvent.java` | 事件發送入口 |
+
+---
+
+# 9. 微服務切分
 
 **不建議獨立拆分**，原因：
 1. 核心協調器，和所有模組有關聯
