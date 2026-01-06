@@ -7,7 +7,7 @@ import org.springframework.stereotype.Component;
 
 import com.citrus.loancore.model.LoanOrder;
 import com.citrus.loancore.model.LoancoreOutbox;
-import com.citrus.loancore.object.dto.PendingOrderPayloadDto;
+import com.citrus.loancore.object.dto.PendingOrderDto;
 import com.citrus.loancore.service.store.LoancoreOutboxStoreService;
 import com.citrus.share.enums.RabbitMQEnum;
 import com.google.gson.Gson;
@@ -42,7 +42,7 @@ public class LoancoreEvent {
         // 建立 Outbox 訊息列表
         List<LoancoreOutbox> outboxList = new ArrayList<>();
         for (LoanOrder order : pendingOrders) {
-            PendingOrderPayloadDto payload = PendingOrderPayloadDto.builder()
+            PendingOrderDto payload = PendingOrderDto.builder()
                     .loanOrderId(order.getLoanOrderId())
                     .userId(order.getUserId())
                     .panNumber(order.getPanNumber())

@@ -13,7 +13,7 @@ import lombok.NoArgsConstructor;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class PendingOrderPayloadDto {
+public class PendingOrderDto {
 
     private String loanOrderId;
     private String userId;
