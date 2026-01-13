@@ -237,16 +237,51 @@ public class MockBsaProvider implements BsaProvider {
 
 ---
 
-# 6. BureauReport 資料模型
+# 6. 資料模型設計（三層架構）
+
+類似支付模組，採用三層架構記錄和甲方的溝通：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ BureauRecord（狀態機）                                       │
+│ - 一筆訂單一條記錄                                           │
+│ - 追蹤整體狀態：PENDING → IN_PROGRESS → COMPLETED/FAILED    │
+│ - 彙整最終結果（PAN、CIBIL、BSA）                           │
+└─────────────────────────────────────────────────────────────┘
+                          │ 1 : N
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│ BureauAttempt（嘗試記錄）                                    │
+│ - 每次呼叫甲方的「嘗試」                                      │
+│ - 記錄用了哪個供應商、最終結果                               │
+│ - 成功的 Attempt 會把結果寫回 Record                        │
+└─────────────────────────────────────────────────────────────┘
+                          │ 1 : N
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│ BureauApiLog（通訊日誌）                                     │
+│ - 每次實際的 HTTP 請求/回應                                  │
+│ - 完整的 req / resp JSON                                    │
+│ - 回應時間、HTTP 狀態碼等                                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 6.1 BureauRecord（彙整報告 + 狀態機？）
+
+> [!WARNING]
+> **討論：這裡需要狀態機嗎？**
+> - LoanOrder 已經有 BUREAU_CHECK 狀態
+> - BureauRecord 是否只需記錄結果，不需要自己的狀態機？
 
 ```java
 @Entity
-@Table(name = "bureau_report")
-public class BureauReport {
+@Table(name = "bureau_record")
+public class BureauRecord {
     @Id
-    private String bureauReportId;
+    private String bureauRecordId;
     private String loanOrderId;
-    private String panNumber;
     
     // === PAN 驗證結果 ===
     private Boolean panValid;
@@ -261,13 +296,87 @@ public class BureauReport {
     private BigDecimal monthlyIncome;
     private BigDecimal avgMonthlyBalance;
     
-    // === 狀態 ===
+    // === 狀態（是否需要？）===
     @Enumerated(EnumType.STRING)
-    private BureauStatusEnum status;  // PENDING / COMPLETED / FAILED
+    private BureauStatusEnum status;  // PENDING / IN_PROGRESS / COMPLETED / FAILED
     
     private Instant createdAt;
     private Instant completedAt;
 }
+```
+
+---
+
+## 6.2 BureauAttempt（嘗試記錄）
+
+每次呼叫甲方的嘗試，可能 call 多個供應商。
+
+```java
+@Entity
+@Table(name = "bureau_attempt")
+public class BureauAttempt {
+    @Id
+    private String attemptId;
+    private String bureauRecordId;      // FK → BureauRecord
+    
+    @Enumerated(EnumType.STRING)
+    private BureauApiTypeEnum apiType;  // PAN_VERIFY / CIBIL_QUERY / BSA_ANALYZE
+    private String providerName;        // KARZA / TRANSUNION / PERFIOS...
+    
+    @Enumerated(EnumType.STRING)
+    private BureauAttemptStatusEnum status;  // PENDING / SUCCESS / FAILED
+    
+    @Column(columnDefinition = "TEXT")
+    private String result;              // 成功時的結果 JSON
+    private String errorMessage;        // 失敗原因
+    
+    private Instant createdAt;
+    private Instant completedAt;
+}
+```
+
+---
+
+## 6.3 BureauApiLog（通訊日誌）
+
+每次 HTTP 請求/回應的完整記錄，用於審計、除錯、對帳。
+
+```java
+@Entity
+@Table(name = "bureau_api_log")
+public class BureauApiLog {
+    @Id
+    private String apiLogId;
+    private String attemptId;           // FK → BureauAttempt
+    
+    // === 請求 ===
+    @Column(columnDefinition = "TEXT")
+    private String requestPayload;
+    private Instant requestAt;
+    
+    // === 回應 ===
+    @Column(columnDefinition = "TEXT")
+    private String responsePayload;
+    private Integer httpStatus;
+    private Instant responseAt;
+    
+    // === 效能 ===
+    private Long responseTimeMs;
+}
+```
+
+---
+
+## 6.4 舉例：查 CIBIL 失敗後換供應商成功
+
+```
+BureauRecord (order_A, status=COMPLETED, cibilScore=720)
+│
+├── BureauAttempt #1 (CIBIL, TransUnion, FAILED)
+│   └── BureauApiLog #1 (504 timeout)
+│
+└── BureauAttempt #2 (CIBIL, Experian, SUCCESS)
+    └── BureauApiLog #2 (200, score=720)
 ```
 
 ---

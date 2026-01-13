@@ -1,13 +1,8 @@
 package com.citrus.loancore.consumer;
 
-import java.util.List;
-
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
 
-import com.citrus.loancore.enums.LoanStateEnum;
-import com.citrus.loancore.model.LoanOrder;
-import com.citrus.loancore.repository.LoanOrderRepository;
 import com.citrus.loancore.usecase.query.LoanOrderQueryUsecase;
 import com.citrus.share.constants.QueueConstants;
 
